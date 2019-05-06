@@ -75,7 +75,9 @@ def generate_example(speech_path, noise_dir, srir_dir, pos_x, pos_y, d_yaw, d_pi
     # Randomly sample a noise example (in B-format) that is at least as long as the example
     noise_data = None
     while noise_data is None or noise_data.shape[1] < src_bformat.shape[1]:
-        noise_data, sr = librosa.load(noise_dir, sr=44100, mono=False)
+        fname = random.choice(os.listdir(noise_dir))
+        noise_path = os.path.join(noise_dir, fname)
+        noise_data, sr = librosa.load(noise_path, sr=44100, mono=False)
 
     # Align B_format noise and B-format speech
     clip_len = src_bformat.shape[1]
