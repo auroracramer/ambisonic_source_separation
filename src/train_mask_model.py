@@ -5,7 +5,7 @@ import argparse
 import os
 from keras.models import Model
 from keras.callbacks import EarlyStopping, CSVLogger, ModelCheckpoint
-from keras.layers import Input, Dense, Reshape, Masking, LSTM, TimeDistributed
+from keras.layers import Input, Dense, Reshape, Masking, ConvLSTM2D, TimeDistributed, Flatten
 from keras.optimizers import Nadam
 from keras.regularizers import l2
 import sys
@@ -14,23 +14,36 @@ from angular import *
 from sample import lstm_data_generator
 
 
-def create_mask_model(num_steps, num_frames, fft_size, hidden_units, num_channels=2, weight_decay=1e-4, dropout=0.5):
+def create_mask_model(num_steps, num_frames, fft_size, num_filters, num_channels=2, weight_decay=1e-4, dropout=0.5):
     feature_size = fft_size // 2 + 1
+    kernel_size = (3, 3)
     input_shape = (num_steps, num_frames, feature_size, num_channels)
     inp = Input(input_shape)
-    net = Reshape((num_steps, num_frames * feature_size * num_channels))(inp)
-    net = Masking(mask_value=0.0)(net)
-    net = LSTM(hidden_units, activation='tanh',
+    net = inp
+    #net = TimeDistributed(Flatten(), input_shape=input_shape)(net)
+    #net = TimeDistributed(Masking(mask_value=0.0))(net)
+    #net = TimeDistributed(Reshape(input_shape[1:]))(net)
+    #net = Masking(mask_value=0.0, input_shape=input_shape)(net)
+    net = ConvLSTM2D(num_filters, kernel_size,
+               activation='tanh',
+               data_format='channels_last',
                return_sequences=True,
                dropout=dropout,
                recurrent_dropout=dropout,
+               kernel_initializer='he_normal',
+               recurrent_initializer='he_normal',
+               bias_initializer='he_normal',
+               go_backwards=True,
                kernel_regularizer=l2(weight_decay),
                recurrent_regularizer=l2(weight_decay),
                bias_regularizer=l2(weight_decay))(net)
 
-    out = TimeDistributed(Dense(feature_size, activation='sigmoid', kernel_regularizer=l2(weight_decay),
-                                bias_regularizer=l2(weight_decay)),
-                          input_shape=input_shape)(net)
+    out = TimeDistributed(Dense(feature_size, activation='sigmoid',
+            kernel_initializer='he_normal',
+            bias_initializer='he_normal',
+            kernel_regularizer=l2(weight_decay),
+            bias_regularizer=l2(weight_decay)),
+            input_shape=input_shape)(net)
 
     model = Model(inputs=inp, outputs=out)
 
@@ -38,7 +51,7 @@ def create_mask_model(num_steps, num_frames, fft_size, hidden_units, num_channel
 
 
 def train(train_list_path, valid_list_path, noise_dir, srir_dir, output_dir, num_steps, num_frames, num_frames_hop,
-          hidden_units, fft_size, hop_size, sample_rate, num_epochs, batch_size, steps_per_epoch, valid_steps, weight_decay,
+          num_filters, fft_size, hop_size, sample_rate, num_epochs, batch_size, steps_per_epoch, valid_steps, weight_decay,
           learning_rate, dropout, patience, active_streamers, streamer_rate, random_state):
 
 
@@ -67,7 +80,9 @@ def train(train_list_path, valid_list_path, noise_dir, srir_dir, output_dir, num
     print("Creating model.")
     sys.stdout.flush()
 
-    model = create_mask_model(num_steps, num_frames, fft_size, hidden_units, weight_decay=weight_decay, dropout=dropout)
+    model = create_mask_model(num_steps, num_frames, fft_size, num_filters,
+                              num_channels=2, weight_decay=weight_decay,
+                              dropout=dropout)
 
     model.compile(loss='mse', optimizer=Nadam(lr=learning_rate), metrics=['accuracy'])
     if not os.path.exists(output_dir):
@@ -106,7 +121,7 @@ if __name__ == '__main__':
     parser.add_argument('--learning-rate', type=float, default=1e-3)
     parser.add_argument('--dropout', type=float, default=0.5)
     parser.add_argument('--patience', type=int, default=10)
-    parser.add_argument('--hidden_units', type=int, default=512)
+    parser.add_argument('--num-filters', type=int, default=64)
     parser.add_argument('--fft-size', type=int, default=1024)
     parser.add_argument('--hop-size', type=int, default=512)
     parser.add_argument('--batch-size', type=int, default=32)

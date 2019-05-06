@@ -124,7 +124,7 @@ def lstm_speech_mask_sampler(speech_path, noise_dir, srir_dir, sc_to_pos_dict, n
 
         snr_ratio = np.random.random()
 
-        src, noise, mix = generate_examples(speech_path,noise_dir,srir_dir,pos_x,pos_y,d_yaw,d_pitch,d_roll,snr_ratio)
+        src, noise, mix = generate_example(speech_path,noise_dir,srir_dir,pos_x,pos_y,d_yaw,d_pitch,d_roll,snr_ratio)
         inp = compute_feature_matrix(steer_idx, mix, steer_mat, num_steps=num_steps, num_frames=num_frames, num_frames_hop=num_frames_hop, fft_size=fft_size, hop_size=hop_size, sr=sr)
 
         mask, _ = compute_masks(src[0], noise[0], sr=sr)
