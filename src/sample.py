@@ -13,8 +13,7 @@ import os
 import random
 import librosa
 
-from angular import rotate_bformat
-from src.angular import rotate_coord, cartesian_to_spherical, beamformer, steer_vector, get_sc_list
+from angular import rotate_bformat, rotate_coord, cartesian_to_spherical, beamformer, steer_vector, get_sc_list
 
 
 def generate_example(speech_path, noise_dir, srir_dir, pos_x, pos_y, d_yaw, d_pitch, d_roll, snr_ratio, sr=44100):
@@ -46,10 +45,12 @@ def generate_example(speech_path, noise_dir, srir_dir, pos_x, pos_y, d_yaw, d_pi
     grid_x = pos_x
     grid_y = pos_y
 
+    room_type = random.choice(os.listdir(srir_dir))
+
     ch_out_list = []
     sh_names = ["W", "X", "Y", "Z"]
     for sh_str in sh_names:
-        ch_ir_path = os.path.join(srir_dir, sh_str,
+        ch_ir_path = os.path.join(srir_dir, room_type, sh_str,
                               "{}x{:02d}y{:02d}.wav".format(sh_str, grid_x, grid_y))
         ch_ir, sr = librosa.load(ch_ir_path, sr=44100)
 
@@ -93,7 +94,7 @@ def generate_example(speech_path, noise_dir, srir_dir, pos_x, pos_y, d_yaw, d_pi
     return src_bformat, noise_data, mix_bformat
 
 
-def lstm_speech_mask_sampler(speech_path, noise_dir, srir_dir, sc_to_pos_dict, fft_size, hop_size, sr):
+def lstm_speech_mask_sampler(speech_path, noise_dir, srir_dir, sc_to_pos_dict, num_steps, num_frames, num_frames_hop, fft_size, hop_size, sr):
     """
     Generates ambisonic source separation examples from a given speech file
 
@@ -110,8 +111,10 @@ def lstm_speech_mask_sampler(speech_path, noise_dir, srir_dir, sc_to_pos_dict, f
     -------
 
     """
-    sc_list = get_sc_list(sc_to_post_dict)
+    sc_list = get_sc_list(sc_to_pos_dict)
     azi_list, elv_list = zip(*sc_list)
+    azi_list = np.array(list(azi_list))
+    elv_list = np.array(list(elv_list))
     steer_mat = steer_vector(azi_list, elv_list)
 
     while True:
@@ -122,7 +125,7 @@ def lstm_speech_mask_sampler(speech_path, noise_dir, srir_dir, sc_to_pos_dict, f
         snr_ratio = np.random.random()
 
         src, noise, mix = generate_examples(speech_path,noise_dir,srir_dir,pos_x,pos_y,d_yaw,d_pitch,d_roll,snr_ratio)
-        inp = compute_feature_matrix(steer_idx, mix, steer_mat, fft_size=fft_size, hop_size=hop_size, sr=sr)
+        inp = compute_feature_matrix(steer_idx, mix, steer_mat, num_steps=num_steps, num_frames=num_frames, num_frames_hop=num_frames_hop, fft_size=fft_size, hop_size=hop_size, sr=sr)
 
         mask, _ = compute_masks(src[0], noise[0], sr=sr)
 
@@ -132,19 +135,20 @@ def lstm_speech_mask_sampler(speech_path, noise_dir, srir_dir, sc_to_pos_dict, f
         }
 
 
-def lstm_data_generator(speech_dir, noise_dir, srir_dir, sc_to_pos_dict, fft_size, hop_size, sr, batch_size,
+def lstm_data_generator(speech_list, noise_dir, srir_dir, sc_to_pos_dict,
+                        num_steps, num_frames, num_frames_hop, fft_size,
+                        hop_size, sr, batch_size,
                         active_streamers, rate, random_state=12345678):
-    for root, dir_list, file_list in os.walk(speech_dir):
-        for fname in file_list:
-            if not fname.endswith('.wav'):
-                continue
+    seeds = []
+    for speech_path in speech_list:
+        if not speech_path.endswith('.wav'):
+            continue
 
-            speech_path = os.path.join(root, fname)
-
-            streamer = pescador.Streamer(lstm_speech_mask_sampler,
-                                         speech_path, noise_dir, srir_dir, sc_to_pos_dict,
-                                         fft_size, hop_size, sr)
-            seeds.append(streamer)
+        streamer = pescador.Streamer(lstm_speech_mask_sampler,
+                                     speech_path, noise_dir, srir_dir, sc_to_pos_dict,
+                                     num_steps, num_frames, num_frames_hop,
+                                     fft_size, hop_size, sr)
+        seeds.append(streamer)
 
     # Randomly shuffle the seeds
     random.shuffle(seeds)
@@ -157,7 +161,7 @@ def lstm_data_generator(speech_dir, noise_dir, srir_dir, sc_to_pos_dict, fft_siz
         return pescador.maps.buffer_stream(mux, batch_size)
 
 
-def compute_feature_matrix(tgt_idx, clip, D, fft_size=1024, hop_size=512, sr=16000):
+def compute_feature_matrix(tgt_idx, clip, D, num_steps=50, num_frames=25, num_frames_hop=13, fft_size=1024, hop_size=512, sr=16000):
     """
     Computes the input feature matrix for the LSTM model, consisting of the beamformed spectrogram and the
     spectrogram of the omnidirectional channel
@@ -191,8 +195,26 @@ def compute_feature_matrix(tgt_idx, clip, D, fft_size=1024, hop_size=512, sr=160
     # s_hat should be (#freq_bins, #time frames)
     s_hat = np.abs(np.dot(x_sp, bf_tgt))
 
-    # The final concatenated feature (#time frames, 3*#frequency bins)
+    F, T = s_hat.shape
+
+    # The final concatenated feature (#frequency bins, #time frames, 2)
     feature = np.stack((x_sp_w, s_hat), axis=-1)
+
+    # Reshape
+    feature = feature.reshape((T, F, 2))
+
+    # Split into frames
+    total_num_frames = num_frames + num_frames_hop * (num_steps - 1)
+    num_pad = num_frames + num_frames_hop * (num_steps - 1) - T
+    if num_pad > 0:
+        feature = np.pad(feature, ((0, num_pad), (0,0), (0,0)), mode='constant')
+
+    frame_idxs = librosa.util.frame(np.arange(total_num_frames),
+                                    frame_length=num_frames,
+                                    hop_length=num_frames_hop).T
+
+    feature = feature[frame_idxs.T]
+
     return feature
 
 
