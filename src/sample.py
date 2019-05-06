@@ -185,10 +185,10 @@ def compute_feature_matrix(tgt_idx, clip, D, num_steps=50, num_frames=25, num_fr
     bf_tgt = bf[tgt_idx,:].flatten()
 
     # Compute stft of 4 channels of audioclip
-    x_sp_w = signal.stft(clip[0,:], fs=sr, window=('hann',fft_size), nperseg=fft_size, noverlap=fft_size-hop_size)
-    x_sp_x = signal.stft(clip[1,:], fs=sr, window=('hann',fft_size), nperseg=fft_size, noverlap=fft_size-hop_size)
-    x_sp_y = signal.stft(clip[2,:], fs=sr, window=('hann',fft_size), nperseg=fft_size, noverlap=fft_size-hop_size)
-    x_sp_z = signal.stft(clip[3,:], fs=sr, window=('hann',fft_size), nperseg=fft_size, noverlap=fft_size-hop_size)
+    x_sp_w = librosa.stft(clip[0,:], n_fft=fft_size, window='hann', hop_length=hop_size)
+    x_sp_x = librosa.stft(clip[1,:], n_fft=fft_size, window='hann', hop_length=hop_size)
+    x_sp_y = librosa.stft(clip[2,:], n_fft=fft_size, window='hann', hop_length=hop_size)
+    x_sp_z = librosa.stft(clip[3,:], n_fft=fft_size, window='hann', hop_length=hop_size)
     # Dimension should be (#freq_bin, #time frame, 4)
     x_sp = np.stack((x_sp_w, x_sp_x, x_sp_y, x_sp_z), axis=-1)
 
@@ -222,8 +222,8 @@ def compute_masks(src, noise, fft_size, hop_size, sr):
     #assuming each audio clip is sampled at 16kHz,compute the STFT
     #with a sinusoidal window of 1024 samples and 50% overlap.
     #window=signal.get_window('hann',1024)
-    sw = signal.stft(src, fs=sr, window=('hann',fft_size), nperseg=fft_size, noverlap=fft_size-hop_size)
-    nw = signal.stft(noise, fs=sr, window=('hann',fft_size), nperseg=fft_size, noverlap=fft_size-hop_size)
+    sw = librosa.stft(src, n_fft=fft_size, window='hann', hop_length=hop_size)
+    nw = librosa.stft(noise, n_fft=fft_size, window='hann', hop_length=hop_size)
     Ms = (np.abs(sw)**2) / (np.abs(sw)**2 + np.abs(nw)**2)
     Mn = 1 - Ms
     return Ms, Mn
