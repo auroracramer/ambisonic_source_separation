@@ -77,6 +77,9 @@ def train(train_list_path, valid_list_path, noise_dir, srir_dir, output_dir, num
                                     active_streamers, streamer_rate,
                                     random_state=random_state)
 
+    train_gen = pescador.maps.keras_tuples(train_gen, 'input', 'mask')
+    valid_gen = pescador.maps.keras_tuples(valid_gen, 'input', 'mask')
+
     print("Creating model.")
     sys.stdout.flush()
 
@@ -101,7 +104,7 @@ def train(train_list_path, valid_list_path, noise_dir, srir_dir, output_dir, num
     model.fit_generator(train_gen, steps_per_epoch=steps_per_epoch,
                         epochs=num_epochs, callbacks=callbacks,
                         validation_data=valid_gen,
-                        validation_steps=valid_steps, verbose=1)
+                        validation_steps=valid_steps, verbose=2)
 
 
 if __name__ == '__main__':

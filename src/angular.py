@@ -13,7 +13,11 @@ def rotate_bformat(bfsig, yaw, pitch, roll, order='xyz'):
     Rbf[1:,1:] = R_mat;
 
     # apply to B-format signals
-    return np.dot(Rbf, bfsig)
+    try:
+        return np.dot(Rbf, bfsig)
+    except:
+        import pdb
+        pdb.set_trace()
 
 
 def rotate_coord(coord, yaw, pitch, roll, order='xyz'):
@@ -105,14 +109,12 @@ def steer_vector(azis, elvs):
     #phi=np.arange(-90,90,ele_res)
 
     #azis and eles are pairs of chosen directions
-    m = azis.shape[0]
-    n = elvs.shape[0]
-    D = np.zeros((4,m*n))#the steering matrix is of size (4,len(pairs)))
+    D = np.stack([
+        np.ones((azis.shape[0],)),
+        np.sqrt(3) * np.cos(azis) * np.cos(elvs),
+        np.sqrt(3) * np.sin(azis) * np.cos(elvs),
+        np.sqrt(3) * np.sin(elvs)])
 
-    for idx, azi in enumerate(azis):
-        for idx2, elv in enumerate(elvs):
-            d = np.array([1,np.sqrt(3)*np.cos(azi)*np.cos(elv),np.sqrt(3)*np.sin(azi)*np.cos(elv),np.sqrt(3)*np.sin(elv)])
-            D[:,idx*n+idx2] = d
     return D
 
 
