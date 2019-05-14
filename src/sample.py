@@ -12,6 +12,8 @@ import pescador
 import os
 import random
 import librosa
+import sys
+import time
 
 from angular import rotate_bformat, rotate_coord, cartesian_to_spherical, beamformer, steer_vector, get_sc_list
 
@@ -39,9 +41,9 @@ def generate_example(src_audio, noise_data, ch_ir_list, d_yaw, d_pitch, d_roll,
     # Convolve speech with srir
     ch_out_list = []
     sh_names = ["W", "X", "Y", "Z"]
+    src_len = src_audio.shape[0]
     for sh_str, ch_ir in zip(sh_names, ch_ir_list):
         ch_ir_len = ch_ir.shape[0]
-        src_len = src_audio.shape[0]
 
         if ch_ir_len > src_len:
             pad_len = ch_ir_len - src_len
@@ -76,7 +78,7 @@ def generate_example(src_audio, noise_data, ch_ir_list, d_yaw, d_pitch, d_roll,
 
 
 def lstm_speech_mask_sampler(speech_path, noise_dir, srir_dir,
-        sc_to_pos_dict, azi_list, elv_list, steer_mat, num_steps, num_frames, num_frames_hop, fft_size, hop_size, sr):
+        sc_to_pos_dict, azi_list, elv_list, steer_mat, num_frames, num_frames_hop, fft_size, hop_size, sr):
     """
     Generates ambisonic source separation examples from a given speech file
 
@@ -105,7 +107,7 @@ def lstm_speech_mask_sampler(speech_path, noise_dir, srir_dir,
         noise_path = os.path.join(noise_dir, fname)
         noise_audio, sr = librosa.load(noise_path, sr=sr, mono=False)
 
-    steer_idx = np.random.randint(len(sc_list))
+    steer_idx = np.random.randint(len(sc_to_pos_dict))
     azi, elv = azi_list[steer_idx], elv_list[steer_idx]
     pos_x, pos_y, d_yaw, d_pitch, d_roll = random.choice(sc_to_pos_dict[(azi, elv)])
 
@@ -140,8 +142,7 @@ def lstm_speech_mask_sampler(speech_path, noise_dir, srir_dir,
     src = np.array(ch_out_list)
 
     if src.ndim == 1:
-        import pdb
-        pdb.set_trace()
+        raise StopIteration
 
     # Apply rotation
     src = rotate_bformat(src, d_yaw, d_pitch, d_roll, order='xyz')
@@ -155,6 +156,8 @@ def lstm_speech_mask_sampler(speech_path, noise_dir, srir_dir,
     sw = librosa.stft(src[0], n_fft=fft_size, window='hann', hop_length=hop_size)
     nw = librosa.stft(noise[0], n_fft=fft_size, window='hann', hop_length=hop_size)
 
+    F, T = sw.shape
+
     while True:
         snr_ratio = np.random.random()
         # Designate snr and scale
@@ -167,20 +170,31 @@ def lstm_speech_mask_sampler(speech_path, noise_dir, srir_dir,
         mix = scaled_src + noise
 
         inp = compute_feature_matrix(steer_idx, mix, steer_mat,
-                                     num_steps=num_steps, num_frames=num_frames,
+                                     num_frames=num_frames,
                                      num_frames_hop=num_frames_hop, fft_size=fft_size,
                                      hop_size=hop_size, sr=sr)
 
         mask, _ = compute_masks(scaled_sw, nw, fft_size, hop_size, sr)
+        mask = mask.T
 
-        yield {
-            'input': inp,
-            'mask': mask
-        }
+
+        # Split into frames
+        frame_idxs = librosa.util.frame(np.arange(T),
+                                        frame_length=num_frames,
+                                        hop_length=num_frames_hop).T
+
+        inp = inp[frame_idxs]
+        mask = mask[frame_idxs]
+
+        for idx in range(inp.shape[0]):
+            yield {
+                'input': inp[idx],
+                'mask': mask[idx]
+            }
 
 
 def lstm_data_generator(speech_list, noise_dir, srir_dir, sc_to_pos_dict,
-                        num_steps, num_frames, num_frames_hop, fft_size,
+                        num_frames, num_frames_hop, fft_size,
                         hop_size, sr, batch_size,
                         active_streamers, rate, random_state=12345678):
 
@@ -198,7 +212,7 @@ def lstm_data_generator(speech_list, noise_dir, srir_dir, sc_to_pos_dict,
         streamer = pescador.Streamer(lstm_speech_mask_sampler,
                                      speech_path, noise_dir, srir_dir, sc_to_pos_dict,
                                      azi_list, elv_list, steer_mat,
-                                     num_steps, num_frames, num_frames_hop,
+                                     num_frames, num_frames_hop,
                                      fft_size, hop_size, sr)
         seeds.append(streamer)
 
@@ -213,10 +227,10 @@ def lstm_data_generator(speech_list, noise_dir, srir_dir, sc_to_pos_dict,
         return pescador.maps.buffer_stream(mux, batch_size)
 
 
-def compute_feature_matrix(tgt_idx, clip, D, num_steps=50, num_frames=25, num_frames_hop=13, fft_size=1024, hop_size=512, sr=16000):
+def compute_feature_matrix(tgt_idx, clip, D, num_frames=25, num_frames_hop=13, fft_size=1024, hop_size=512, sr=16000):
     """
-    Computes the input feature matrix for the LSTM model, consisting of the beamformed spectrogram and the
-    spectrogram of the omnidirectional channel
+    Computes the input feature matrix for the LSTM model, consisting of the
+    beamformed spectrogram and the spectrogram of the omnidirectional channel
 
     Parameters
     ----------
@@ -253,19 +267,7 @@ def compute_feature_matrix(tgt_idx, clip, D, num_steps=50, num_frames=25, num_fr
     feature = np.stack((np.abs(x_sp_w), s_hat), axis=-1)
 
     # Reshape
-    feature = feature.reshape((T, F, 2))
-
-    # Split into frames
-    total_num_frames = num_frames + num_frames_hop * (num_steps - 1)
-    num_pad = num_frames + num_frames_hop * (num_steps - 1) - T
-    if num_pad > 0:
-        feature = np.pad(feature, ((0, num_pad), (0,0), (0,0)), mode='constant')
-
-    frame_idxs = librosa.util.frame(np.arange(total_num_frames),
-                                    frame_length=num_frames,
-                                    hop_length=num_frames_hop).T
-
-    feature = feature[frame_idxs.T]
+    feature = np.transpose(feature, (1,0,2))
 
     return feature
 

@@ -5,7 +5,7 @@ import argparse
 import os
 from keras.models import Model
 from keras.callbacks import EarlyStopping, CSVLogger, ModelCheckpoint
-from keras.layers import Input, Dense, Reshape, Masking, ConvLSTM2D, TimeDistributed, Flatten
+from keras.layers import Input, Dense, Reshape, Masking, LSTM, TimeDistributed, Flatten
 from keras.optimizers import Nadam
 from keras.regularizers import l2
 import sys
@@ -14,19 +14,13 @@ from angular import *
 from sample import lstm_data_generator
 
 
-def create_mask_model(num_steps, num_frames, fft_size, num_filters, num_channels=2, weight_decay=1e-4, dropout=0.5):
+def create_mask_model(num_frames, fft_size, num_units, num_channels=2, weight_decay=1e-4, dropout=0.5):
     feature_size = fft_size // 2 + 1
-    kernel_size = (3, 3)
-    input_shape = (num_steps, num_frames, feature_size, num_channels)
+    input_shape = (num_frames, feature_size, num_channels)
     inp = Input(input_shape)
-    net = inp
-    #net = TimeDistributed(Flatten(), input_shape=input_shape)(net)
-    #net = TimeDistributed(Masking(mask_value=0.0))(net)
-    #net = TimeDistributed(Reshape(input_shape[1:]))(net)
-    #net = Masking(mask_value=0.0, input_shape=input_shape)(net)
-    net = ConvLSTM2D(num_filters, kernel_size,
+    net = Reshape((num_frames, feature_size * num_channels))(inp)
+    net = LSTM(num_units,
                activation='tanh',
-               data_format='channels_last',
                return_sequences=True,
                dropout=dropout,
                recurrent_dropout=dropout,
@@ -50,8 +44,8 @@ def create_mask_model(num_steps, num_frames, fft_size, num_filters, num_channels
     return model
 
 
-def train(train_list_path, valid_list_path, noise_dir, srir_dir, output_dir, num_steps, num_frames, num_frames_hop,
-          num_filters, fft_size, hop_size, sample_rate, num_epochs, batch_size, steps_per_epoch, valid_steps, weight_decay,
+def train(train_list_path, valid_list_path, noise_dir, srir_dir, output_dir, num_frames, num_frames_hop,
+          num_units, fft_size, hop_size, sample_rate, num_epochs, batch_size, steps_per_epoch, valid_steps, weight_decay,
           learning_rate, dropout, patience, active_streamers, streamer_rate, random_state):
 
 
@@ -67,12 +61,12 @@ def train(train_list_path, valid_list_path, noise_dir, srir_dir, output_dir, num
     sys.stdout.flush()
 
     train_gen = lstm_data_generator(train_list, noise_dir, srir_dir, sc_to_pos_dict,
-                                    num_steps, num_frames, num_frames_hop,
+                                    num_frames, num_frames_hop,
                                     fft_size, hop_size, sample_rate, batch_size,
                                     active_streamers, streamer_rate,
                                     random_state=random_state)
     valid_gen = lstm_data_generator(valid_list, noise_dir, srir_dir, sc_to_pos_dict,
-                                    num_steps, num_frames, num_frames_hop,
+                                    num_frames, num_frames_hop,
                                     fft_size, hop_size, sample_rate, batch_size,
                                     active_streamers, streamer_rate,
                                     random_state=random_state)
@@ -83,7 +77,7 @@ def train(train_list_path, valid_list_path, noise_dir, srir_dir, output_dir, num
     print("Creating model.")
     sys.stdout.flush()
 
-    model = create_mask_model(num_steps, num_frames, fft_size, num_filters,
+    model = create_mask_model(num_frames, fft_size, num_units,
                               num_channels=2, weight_decay=weight_decay,
                               dropout=dropout)
 
@@ -104,7 +98,8 @@ def train(train_list_path, valid_list_path, noise_dir, srir_dir, output_dir, num
     model.fit_generator(train_gen, steps_per_epoch=steps_per_epoch,
                         epochs=num_epochs, callbacks=callbacks,
                         validation_data=valid_gen,
-                        validation_steps=valid_steps, verbose=2)
+                        validation_steps=valid_steps, verbose=2,
+                        workers=0)
 
 
 if __name__ == '__main__':
@@ -117,22 +112,21 @@ if __name__ == '__main__':
     parser.add_argument('output_dir')
 
     parser.add_argument('--sample-rate', type=int, default=16000)
-    parser.add_argument('--num-steps', type=int, default=50)
     parser.add_argument('--num-frames', type=int, default=25)
     parser.add_argument('--num-frames-hop', type=int, default=13)
     parser.add_argument('--weight-decay', type=float, default=1e-4)
     parser.add_argument('--learning-rate', type=float, default=1e-3)
     parser.add_argument('--dropout', type=float, default=0.5)
     parser.add_argument('--patience', type=int, default=10)
-    parser.add_argument('--num-filters', type=int, default=64)
+    parser.add_argument('--num-units', type=int, default=64)
     parser.add_argument('--fft-size', type=int, default=1024)
     parser.add_argument('--hop-size', type=int, default=512)
     parser.add_argument('--batch-size', type=int, default=32)
     parser.add_argument('--steps-per-epoch', type=int, default=64)
     parser.add_argument('--num-epochs', type=int, default=512)
     parser.add_argument('--valid-steps', type=int, default=1024)
-    parser.add_argument('--active-streamers', type=int, default=20)
-    parser.add_argument('--streamer-rate', type=int, default=16)
+    parser.add_argument('--active-streamers', type=int, default=64)
+    parser.add_argument('--streamer-rate', type=int, default=64)
     parser.add_argument('--random-state', type=int, default=12345678)
 
     args = vars(parser.parse_args())
